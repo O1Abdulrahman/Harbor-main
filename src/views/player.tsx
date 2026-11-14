@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { writePlayerPrefs } from "@/lib/player-prefs";
+import { nextAudioTrack, stepSubFontSize, trackDisplayName } from "@/lib/player/track-cycle";
 import { SportsDockControls } from "./sports/dock-controls";
 import { useDockDrag, type DockSpot } from "./sports/use-dock-drag";
 import { readEmbedRect } from "@/lib/player/embed-rect";
@@ -1038,7 +1040,26 @@ function NativePlayerView({ src }: { src: PlayerSrc }) {
     })();
   }, [liveUrl, reloadSource, showSyncToast, src.url, t, transcodedUrl]);
 
-  const { holdSpeedActive, showStats, subtitleOffsetSec } = usePlayerHotkeys({
+  const cycleAudio = useCallback(() => {
+    const next = nextAudioTrack(snapRef.current.audioTracks);
+    if (!next) return;
+    bridgeRef.current?.setAudioTrack(next.id);
+    if (next.lang) writePlayerPrefs(src.meta.id, { audioLang: next.lang });
+    showSyncToast("ok", t("Audio: {name}", { name: trackDisplayName(next) }));
+  }, [showSyncToast, src.meta.id, t]);
+  const stepSubtitleSize = useCallback(
+    (direction: 1 | -1) => {
+      const size = stepSubFontSize(settings.subFontSize, direction);
+      if (size !== settings.subFontSize) update({ subFontSize: size });
+      showSyncToast("ok", t("Subtitle size: {size}", { size }));
+    },
+    [settings.subFontSize, showSyncToast, t, update],
+  );
+
+  // Set below once the HDR stage is known; the panel only mounts on the plain full player.
+  const shortcutsAvailableRef = useRef(false);
+  const canShowShortcuts = useCallback(() => shortcutsAvailableRef.current, []);
+  const { holdSpeedActive, showStats, shortcuts, subtitleOffsetSec } = usePlayerHotkeys({
     bridgeRef,
     snap,
     metaId: src.meta.id,
@@ -1054,6 +1075,9 @@ function NativePlayerView({ src }: { src: PlayerSrc }) {
     togglePip: togglePipMode,
     fullscreen,
     cycleSubtitles,
+    cycleAudio,
+    onSubSize: stepSubtitleSize,
+    canShowShortcuts,
     playNext,
     playPrev,
     hasNextEpisode: hasNextEpisodeNow,
@@ -1320,6 +1344,13 @@ function NativePlayerView({ src }: { src: PlayerSrc }) {
       );
     },
   });
+  // Mirrors where StageOverlays renders the panel, so it never sits open while hidden.
+  const shortcutsAvailable = !docked && !pipMode && !hdrStageActive;
+  shortcutsAvailableRef.current = shortcutsAvailable;
+  const closeShortcuts = shortcuts.close;
+  useEffect(() => {
+    if (!shortcutsAvailable) closeShortcuts();
+  }, [closeShortcuts, shortcutsAvailable]);
 
   const { mpvEmbedWindowsActive, stageBg } = embedFlags(
     engine,
@@ -1442,6 +1473,8 @@ function NativePlayerView({ src }: { src: PlayerSrc }) {
     subShowInPip: settings.subShowInPip,
     subAssNative,
     showStats,
+    showShortcuts: shortcuts.open,
+    closeShortcuts: shortcuts.close,
     holdSpeedActive: holdSpeedActive || holdSpeed.active,
     holdSpeed,
     subtitleOffsetSec,
